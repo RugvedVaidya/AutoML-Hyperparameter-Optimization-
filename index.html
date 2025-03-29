@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AutoML - Upload Dataset</title>
+</head>
+<body>
+    <h2>Upload a Dataset (CSV)</h2>
+    <form action="/" method="post" enctype="multipart/form-data">
+        <input type="file" name="file" required>
+        <br><br>
+        <label for="target_column">Enter Target Column Name:</label>
+        <input type="text" name="target_column" required>
+        <br><br>
+        <input type="submit" value="Upload & Process">
+    </form>
+</body>
+</html>

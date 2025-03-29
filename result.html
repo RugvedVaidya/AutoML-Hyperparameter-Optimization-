@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Model Comparison Results</title>
+</head>
+<body>
+    <h2>Model Comparison Results</h2>
+    <table border="1">
+        <tr>
+            <th>Model</th>
+            <th>Accuracy (%)</th>
+        </tr>
+        {% for model, acc in results %}
+        <tr>
+            <td>{{ model }}</td>
+            <td>{{ acc }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    <h3>Best Model: {{ best_model }} with {{ best_accuracy }}% accuracy</h3>
+</body>
+</html>
