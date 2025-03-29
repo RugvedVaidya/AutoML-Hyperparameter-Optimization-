@@ -120,24 +120,23 @@ def clean_and_preprocess_data(df, target_column):
 
 # ✅ Function to Train and Compare Multiple Models with Hyperparameter Optimization
 def train_and_compare_models(X, y):
+    from sklearn.model_selection import train_test_split
+
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
- 
-    is_classification = isinstance(y.iloc[0], (np.integer, np.bool_)) or y.nunique() < 10
-    
-    # Apply SMOTE only to training data
+
+    # Determine if it's a classification problem
+    is_classification = isinstance(y[0], (np.integer, np.bool_)) or len(np.unique(y)) < 10
+
+    # Apply SMOTE for classification tasks with imbalanced data
     if is_classification and len(np.unique(y_train)) > 1 and len(np.unique(y_train)) < 10:
         try:
             smote = SMOTE(random_state=42)
             X_train, y_train = smote.fit_resample(X_train, y_train)
-            # X_test remains unaltered
         except Exception as e:
             print(f"SMOTE error: {e}. Proceeding without SMOTE.")
-    
-    # Determine evaluation metrics based on task type
-    if is_classification:
-        scoring = 'f1_weighted' if len(np.unique(y)) > 2 else 'f1'
-    else:
-        scoring = 'neg_mean_squared_error'
+
+    # Define scoring metric
+    scoring = 'f1_weighted' if is_classification else 'neg_mean_squared_error'
 
     # Model hyperparameter grids
     param_grids = {
@@ -151,11 +150,7 @@ def train_and_compare_models(X, y):
             }
         },
         "XGBoost": {
-            'model': XGBClassifier(
-                eval_metric="mlogloss" if is_classification else "rmse", 
-                random_state=42,
-                objective="multi:softprob"  # Add this for multi-class classification
-            ),
+            'model': XGBClassifier(eval_metric="mlogloss" if is_classification else "rmse", random_state=42),
             'params': {
                 'n_estimators': [50, 100, 200],
                 'learning_rate': [0.01, 0.1, 0.3],
@@ -187,7 +182,7 @@ def train_and_compare_models(X, y):
             'params': {
                 'n_neighbors': [3, 5, 7, 9],
                 'weights': ['uniform', 'distance'],
-                'p': [1, 2]  # 1 for Manhattan, 2 for Euclidean
+                'p': [1, 2]
             }
         }
     }
@@ -202,103 +197,101 @@ def train_and_compare_models(X, y):
     for name, model_info in param_grids.items():
         try:
             print(f"\nOptimizing {name}...")
+
             model = model_info['model']
             param_grid = model_info['params']
-            
-            # Use RandomizedSearchCV with cross-validation
+
+            # Step 1: RandomizedSearchCV for broad tuning
             search = RandomizedSearchCV(
                 model, param_grid, 
-                n_iter=5,  # Number of parameter settings to try
-                cv=5,      # 5-fold cross-validation
+                n_iter=10,  # Increased iterations for better search
+                cv=5,
                 scoring=scoring,
-                n_jobs=-1, # Use all available cores
+                n_jobs=-1,
                 random_state=42,
                 verbose=1
             )
-            
             search.fit(X_train, y_train)
-            
-            # Get best model
+
+            # Best parameters from RandomizedSearchCV
             best_params = search.best_params_
             best_estimator = search.best_estimator_
-            
+
+            # Step 2: Fine-tuning with GridSearchCV (on best parameters)
+            refined_grid = {key: [value] for key, value in best_params.items()}  # Convert to grid format
+            grid_search = GridSearchCV(
+                best_estimator, refined_grid,
+                cv=5,
+                scoring=scoring,
+                n_jobs=-1,
+                verbose=1
+            )
+            grid_search.fit(X_train, y_train)
+
+            final_best_model = grid_search.best_estimator_
+
             # Evaluate on test set
-            y_pred = best_estimator.predict(X_test)
+            y_pred = final_best_model.predict(X_test)
             if is_classification:
-                try:
-                    accuracy = accuracy_score(y_test, y_pred)
-                    f1 = f1_score(y_test, y_pred, average='weighted')
-                    precision = precision_score(y_test, y_pred, average='weighted')
-                    recall = recall_score(y_test, y_pred, average='weighted')
-                    
-                    # Try to get ROC AUC for binary classification
-                    roc_auc = 0
-                    if len(np.unique(y)) == 2:
-                        try:
-                            if hasattr(best_estimator, "predict_proba"):
-                                y_prob = best_estimator.predict_proba(X_test)[:, 1]
-                                roc_auc = roc_auc_score(y_test, y_prob)
-                        except Exception as e:
-                            print(f"Could not calculate ROC AUC: {e}")
-                    
-                    model_results = {
-                        'accuracy': round(accuracy * 100, 2),
-                        'f1_score': round(f1 * 100, 2),
-                        'precision': round(precision * 100, 2),
-                        'recall': round(recall * 100, 2),
-                        'roc_auc': round(roc_auc * 100, 2) if roc_auc > 0 else 'N/A'
-                    }
-                    
-                    # Use F1 score as the main metric for comparison
-                    score = f1
-                except Exception as e:
-                    print(f"Error calculating metrics for {name}: {e}")
-                    model_results = {'error': str(e)}
-                    score = -np.inf
+                accuracy = accuracy_score(y_test, y_pred)
+                f1 = f1_score(y_test, y_pred, average='weighted')
+                precision = precision_score(y_test, y_pred, average='weighted')
+                recall = recall_score(y_test, y_pred, average='weighted')
+
+                roc_auc = 0
+                if len(np.unique(y)) == 2:
+                    if hasattr(final_best_model, "predict_proba"):
+                        y_prob = final_best_model.predict_proba(X_test)[:, 1]
+                        roc_auc = roc_auc_score(y_test, y_prob)
+
+                model_results = {
+                    'accuracy': round(accuracy * 100, 2),
+                    'f1_score': round(f1 * 100, 2),
+                    'precision': round(precision * 100, 2),
+                    'recall': round(recall * 100, 2),
+                    'roc_auc': round(roc_auc * 100, 2) if roc_auc > 0 else 'N/A'
+                }
+                score = f1  # Use F1 score for model comparison
             else:
-                # For regression
                 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
                 mse = mean_squared_error(y_test, y_pred)
                 rmse = np.sqrt(mse)
                 mae = mean_absolute_error(y_test, y_pred)
                 r2 = r2_score(y_test, y_pred)
-                
+
                 model_results = {
                     'rmse': round(rmse, 4),
                     'mae': round(mae, 4),
                     'r2': round(r2, 4)
                 }
-                
-                # Use negative RMSE as the score (higher is better for comparison)
-                score = -rmse
-            
-            # Save model info
+                score = -rmse  # Use negative RMSE for comparison
+
+            # Store results
             results[name] = model_results
             models_info[name] = {
                 'best_params': best_params,
-                'model': best_estimator
+                'model': final_best_model
             }
-            
-            # Check if this is the best model so far
+
+            # Check if this is the best model
             if score > best_score:
                 best_score = score
                 best_model_name = name
-                best_model = best_estimator
-                
+                best_model = final_best_model
+
             print(f"{name} optimized. Best params: {best_params}")
             print(f"Results: {model_results}")
-            
+
         except Exception as e:
             print(f"Error training {name}: {e}")
             results[name] = {'error': str(e)}
-    
+
     # Save the best model
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_path = os.path.join(app.config["MODEL_FOLDER"], f"{best_model_name}_{timestamp}.pkl")
+    model_path = os.path.join("models", f"{best_model_name}_{timestamp}.pkl")
     joblib.dump(best_model, model_path)
-    
-    return results, best_model_name, model_path, models_info
 
+    return results, best_model_name, model_path, models_info
 # ✅ Flask Route for File Upload and Processing
 @app.route("/", methods=["GET", "POST"])
 def index():
