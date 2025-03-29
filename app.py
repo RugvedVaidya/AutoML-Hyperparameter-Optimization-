@@ -15,6 +15,7 @@ from werkzeug.utils import secure_filename
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 import joblib
 import datetime
+from sklearn.preprocessing import LabelEncoder
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -24,6 +25,10 @@ os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 os.makedirs(app.config["MODEL_FOLDER"], exist_ok=True)
 
 # ✅ Data Cleaning & Preprocessing Function
+import pandas as pd
+import re
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+
 def clean_and_preprocess_data(df, target_column):
     df = df.copy()
 
@@ -49,7 +54,13 @@ def clean_and_preprocess_data(df, target_column):
     X = df.drop(columns=[target_column])
     y = df[target_column]
 
-    # ✅ One-Hot Encode categorical features
+    # 🚀 **Fix: Label Encode Target Column (y)**
+    if y.dtype == "object":
+        le = LabelEncoder()
+        y = le.fit_transform(y) # Convert categorical labels to numerical values
+        y = pd.Series(le.fit_transform(y), name=target_column)  # Keep y as a Series
+
+    # ✅ One-Hot Encode categorical features (excluding target)
     categorical_cols = X.select_dtypes(include=['object']).columns
     X = pd.get_dummies(X, columns=categorical_cols, drop_first=True)
 
@@ -92,23 +103,35 @@ def clean_and_preprocess_data(df, target_column):
                 cols.append(col)
                 seen.add(col)
         X.columns = cols
+        
+    return X, y, scaler
+
+
 
     # ✅ Handle class imbalance using SMOTE (only for classification)
-    if len(y.unique()) > 1 and len(y.unique()) < 10:  # Only for classification with reasonable number of classes
-        try:
-            smote = SMOTE(random_state=42)
-            X, y = smote.fit_resample(X, y)
-        except Exception as e:
-            print(f"SMOTE error: {e}. Proceeding without SMOTE.")
+    #if len(y.unique()) > 1 and len(y.unique()) < 10:  # Only for classification with reasonable number of classes
+    #    try:
+    #        smote = SMOTE(random_state=42)
+    #        X, y = smote.fit_resample(X, y)
+    #    except Exception as e:
+    #        print(f"SMOTE error: {e}. Proceeding without SMOTE.")
 
-    return X, y, scaler
+    #return X, y, scaler
 
 # ✅ Function to Train and Compare Multiple Models with Hyperparameter Optimization
 def train_and_compare_models(X, y):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    # Check if the task is classification or regression
+ 
     is_classification = isinstance(y.iloc[0], (np.integer, np.bool_)) or y.nunique() < 10
+    
+    # Apply SMOTE only to training data
+    if is_classification and len(np.unique(y_train)) > 1 and len(np.unique(y_train)) < 10:
+        try:
+            smote = SMOTE(random_state=42)
+            X_train, y_train = smote.fit_resample(X_train, y_train)
+            # X_test remains unaltered
+        except Exception as e:
+            print(f"SMOTE error: {e}. Proceeding without SMOTE.")
     
     # Determine evaluation metrics based on task type
     if is_classification:
@@ -128,7 +151,11 @@ def train_and_compare_models(X, y):
             }
         },
         "XGBoost": {
-            'model': XGBClassifier(eval_metric="mlogloss" if is_classification else "rmse", random_state=42),
+            'model': XGBClassifier(
+                eval_metric="mlogloss" if is_classification else "rmse", 
+                random_state=42,
+                objective="multi:softprob"  # Add this for multi-class classification
+            ),
             'params': {
                 'n_estimators': [50, 100, 200],
                 'learning_rate': [0.01, 0.1, 0.3],
